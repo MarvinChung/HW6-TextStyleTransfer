@@ -19,6 +19,12 @@ This folder contains the code for the paper [《Style Transformer: Unpaired Text
     - Download https://drive.google.com/open?id=1pklyWxzNPPxnKNy_TmA8h_tmGmiZttPN
     - Put `ppl_yelp.binary` in the folder `evaluator`
 
+3. nltk setup
+    - Run the following command to download (or double-check) nltk tokenizer dependency:
+    ```
+    python -c "import nltk; nltk.download('punkt')"
+    ```
+
 ## Usage
 
 The hyperparameters for the Style Transformer can be found in `main.py` or with `python main.py -h`.
