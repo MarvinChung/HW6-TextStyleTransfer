@@ -70,7 +70,7 @@ if __name__ == '__main__':
     parser.add_argument("-train_iter", help="total training iterations", default=2000 , type=int)
     #parser.add_argument("-log_steps", dest="log_steps", default=5 , type=int)
     parser.add_argument("-eval_steps", help="the number of steps to per evaluation", default=25 , type=int)
-    parser.add_argument("-learned_pos_embed", help="whether to learn positional embedding", default=True, type=bool)
+    parser.add_argument("-learned_pos_embed", help="whether to learn positional embedding", default="1", choices=['1', '0', 'True', 'False'])
     parser.add_argument("-dropout", help="the dropout factor for the whole model", default=0.1, type=float)
     
     parser.add_argument("-slf_factor", help="the weight factor for the self reconstruction loss", default=0.25, type=float)
@@ -103,6 +103,7 @@ if __name__ == '__main__':
     args.temperature_config = [(args.temp, 0), (0.5*args.temp, args.train_iter)] # (temp, step) ...
     args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     args.num_classes = args.num_styles + 1 if args.discriminator_method == 'Multi' else 2
+    args.learned_pos_embed = args.learned_pos_embed.lower() in ("true", "1")
     
     if args.part2:
         from part2 import part2
