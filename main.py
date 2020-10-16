@@ -11,7 +11,7 @@ from test import dev_eval
 def main(args):
     # logging
     if args.use_wandb:
-        wandb.init(project="style-transfer", config=args)
+        wandb.init(project="HW5-TextStyleTransfer", config=args)
         #wandb.config.update(vars(args))
         args = wandb.config
         print(args)
