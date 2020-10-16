@@ -1,0 +1,26 @@
+command:
+- python3
+- ${program}
+- -data_path
+- ./data/mix/
+- --do_train
+- --use_wandb
+method: bayes
+metric:
+  goal: maximize
+  name: total_bleu
+parameters:
+  batch_size:
+    distribution: int_uniform
+    max: 64
+    min: 32
+  lr_D:
+    distribution: uniform
+    max: 0.0002
+    min: 5e-05
+  lr_F:
+    distribution: uniform
+    max: 0.0002
+    min: 5e-05
+program: main.py
+
