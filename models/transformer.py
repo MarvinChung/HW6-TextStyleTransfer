@@ -225,7 +225,7 @@ class Generator(nn.Module):
 
     def forward(self, x, temperature):
         if self.use_gumbel:
-            return torch.nn.functional.gumbel_softmax(self.proj(x), tau=temperature, hard=False, eps=1e-10, dim=-1)
+            return torch.log(torch.nn.functional.gumbel_softmax(self.proj(x), tau=temperature, hard=False, eps=1e-10, dim=-1))
         else:
             return F.log_softmax(self.proj(x) / temperature, dim=-1)
 
