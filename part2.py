@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn.functional as F
 import time 
 from data import load_dataset
 from models import StyleTransformer, Discriminator
@@ -15,47 +16,83 @@ def log(f, *args):
     print(*args)
     print(*args, file=f)
 
-def show_attn(src, output, attention, title, output_name=None):
+def plot_attn(attention, inp_token, style, out_token, vocab, ax, title=None):
 
-    src = ['[style]'] + src
-
-    assert len(src) == attention[0].shape[1]
-    assert len(output) == attention[0].shape[0]
-
-
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 10))
-
-    axes = [ax1, ax2, ax3, ax4]
-    for i in range(len(axes)):
-        
-        ax = axes[i]
-        im = ax.imshow(attention[i], cmap="YlGn")
-
-        # Create colorbar
-        cbar = ax.figure.colorbar(im, ax=ax)
-        cbar.ax.set_ylabel("weight", rotation=-90, va="bottom")
-
-        ax.set_xticks(np.arange(len(src)))
-        ax.set_yticks(np.arange(len(output)))
-
-        ax.set_xticklabels(src)
-        ax.set_yticklabels(output)
-
-        plt.setp(ax.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
-
-        for edge, spine in ax.spines.items():
-            spine.set_visible(False)
-
-        ax.set_xticks(np.arange(attention.shape[1]+1)-.5, minor=True)
-        ax.set_yticks(np.arange(attention.shape[0]+1)-.5, minor=True)
-        ax.grid(which="minor", color="w", linestyle='-', linewidth=3)
-        ax.tick_params(which="minor", bottom=False, left=False)
-        ax.set_title(f'Head {i}')
-        fig.tight_layout()
+    style_text = '[neg]' if style == 0 else '[pos]'
+    inp_text = [style_text] + [vocab.itos[i] for i in inp_token]
+    out_text = [vocab.itos[i] for i in out_token]
     
-    plt.tight_layout()
-    if output_name:
-        plt.savefig(output_name)
+    inp_length = inp_text.index('<eos>')
+    out_length = out_text.index('<eos>')
+
+    inp_text = inp_text[:inp_length]
+    out_text = out_text[:out_length]
+    attention = attention[:out_length, :inp_length]
+    attention /= torch.sum(attention, dim=-1, keepdim=True)
+
+    im = ax.imshow(attention, cmap="YlGn")
+
+    ax.set_xticks(np.arange(inp_length))
+    ax.set_yticks(np.arange(out_length))
+
+    ax.set_xticklabels(inp_text)
+    ax.set_yticklabels(out_text)
+
+    ax.set_title(title)
+
+def find_gradient(model, log_prob, inp_token, style, out_token):
+    
+    loss = F.nll_loss(log_prob, out_token, reduction='none')
+
+    token_emb_weight = model.embed.token_embed.weight
+    style_emb_weight = model.style_embed.weight
+
+    gradient_list = []
+    for i in range(len(out_token)):
+        model.zero_grad()
+        loss[i].backward(retain_graph=True)
+
+        full_tok_gradients = token_emb_weight.grad
+        full_style_gradients = style_emb_weight.grad
+
+        tok_gradients = torch.index_select(full_tok_gradients, dim=0, index=inp_token)
+        style_gradients = full_style_gradients[style]
+
+        inp_gradients = torch.cat((style_gradients.unsqueeze(0), tok_gradients), 0).detach()
+        # norms = torch.linalg.norm(inp_gradients, ord=2, dim=-1).detach()
+        # sums = torch.sum(norms, dim=-1)
+        # norms /= sums
+        # norms_list.append(norms)
+        gradient_list.append(inp_gradients)
+
+    # gradient_norm = torch.stack(norms_list).cpu()
+    gradient = torch.stack(gradient_list).cpu()
+    # return gradient_norm
+    return gradient
+
+def plot_gradient_norm(gradient, inp_token, style, out_token, vocab, ax, title):
+    
+    style_text = '[neg]' if style == 0 else '[pos]'
+    inp_text = [style_text] + [vocab.itos[i] for i in inp_token]
+    out_text = [vocab.itos[i] for i in out_token]
+    
+    inp_length = inp_text.index('<eos>')
+    out_length = out_text.index('<eos>')
+
+    inp_text = inp_text[:inp_length]
+    out_text = out_text[:out_length]
+    gradient = gradient[:out_length, :inp_length]
+
+    gradient_norm = torch.linalg.norm(gradient, ord=2, dim=-1)
+    gradient_norm /= torch.sum(gradient_norm, dim=-1, keepdim=True) # normalize
+
+    ax.imshow(gradient_norm)
+    ax.set_xticks(np.arange(inp_length))
+    ax.set_yticks(np.arange(out_length))
+    ax.set_xticklabels(inp_text)
+    ax.set_yticklabels(out_text)
+    ax.set_title(title)
+    # ax.set(xlabel='input', ylabel='output')
 
 def part2(args):
 
@@ -94,71 +131,144 @@ def part2(args):
     eos_idx = vocab.stoi['<eos>'] # 2
     unk_idx = vocab.stoi['<unk>'] # 0
 
-    
-    ## 2-1 attention
-    log(log_f, "***** 2-1: Attention *****")
+    ## we would use the s_id-th example
+    sample_id = np.random.randint(args.batch_size)
+    batch = next(iter(pos_iter))
+    sample_inp_token = batch.text[sample_id]
+    sample_inp_length = get_lengths(batch.text, eos_idx)[sample_id]
+    sample_raw_style = 1
 
-    gold_text = []
-    gold_token = []
-    rev_output = []
-    rev_token = []
+    ## 2-1 attention
+    log(log_f, "***** 2-1: Attention & Gradient norm *****")
+
     attn_weight = None
 
-    raw_style = 1 ## neg: 0, pos: 1
+    inp_token = sample_inp_token
+    inp_tokens = torch.stack((inp_token, inp_token))
+    inp_lengths = get_lengths(inp_tokens, eos_idx)
+    raw_style = sample_raw_style
+    styles = torch.tensor([raw_style, 1-raw_style]).type_as(inp_tokens)
 
+    log_probs = model_F(
+        inp_tokens, 
+        None,
+        inp_lengths,
+        styles,
+        generate=True,
+        differentiable_decode=False,
+        temperature=1,
+    )
 
-    for batch in pos_iter:
+    recon_log_prob = log_probs[0]
+    recon_out_token = torch.argmax(recon_log_prob, dim=-1)
+    rev_log_prob = log_probs[1]
+    rev_out_token = torch.argmax(rev_log_prob, dim=-1)
 
-        inp_tokens = batch.text
-        inp_lengths = get_lengths(inp_tokens, eos_idx)
-        raw_styles = torch.full_like(inp_tokens[:, 0], raw_style)
-        rev_styles = 1 - raw_styles
+    inp_text = [vocab.itos[i] for i in inp_token]
+    recon_out_text = [vocab.itos[i] for i in recon_out_token]
+    rev_out_text = [vocab.itos[i] for i in rev_out_token]
 
-        with torch.no_grad():
-            rev_log_probs = model_F(
-                inp_tokens, 
-                None,
-                inp_lengths,
-                rev_styles,
-                generate=True,
-                differentiable_decode=False,
-                temperature=1
-            )
+    inp_len = inp_text.index('<eos>')
+    recon_out_len = recon_out_text.index('<eos>')
+    rev_out_len = rev_out_text.index('<eos>')
 
-        rev_attn = model_F.get_decode_src_attn_weight()
-        if attn_weight == None:
-            attn_weight = rev_attn
-        else:
-            for layer in range(len(rev_attn)):
-                attn_weight[layer] = torch.cat([attn_weight[layer], rev_attn[layer]])
-
-
-        gold_text += tensor2text(vocab, inp_tokens.cpu())
-        rev_idx = rev_log_probs.argmax(-1).cpu()
-        rev_output += tensor2text(vocab, rev_idx)
-
-        gold_token.extend([[vocab.itos[j] for j in i] for i in inp_tokens])
-        rev_token.extend([[vocab.itos[j] for j in i ] for i in rev_idx])
-
-        break ## select first batch to speed up
+    log(log_f, '[inp]:', ' '.join(inp_text[:inp_len]))
+    log(log_f, '[rec]:', ' '.join(recon_out_text[:recon_out_len]))
+    log(log_f, '[rev]:', ' '.join(rev_out_text[:rev_out_len]))
     
-    # attn_weight[layer] = (Batch, Head, Source, Style+Target)
+    ### part a: attention
+    log(log_f, "part a: attention")
+    rev_attn = model_F.get_decode_src_attn_weight()
 
-    idx = np.random.randint(len(rev_output))
-    log(log_f, '*' * 20, 'pos sample', '*' * 20)
-    log(log_f, '[gold]', gold_text[idx])
-    log(log_f, '[rev ]', rev_output[idx])
-    for l in range(len(attn_weight)):
-        output_name = os.path.join(output_dir, f'problem1_attn_layer{l}.png')
-        show_attn(gold_token[idx], rev_token[idx], attn_weight[l][idx], 'attention map', output_name)
-        log(log_f, f'save attention figure at {output_name}')
+    if attn_weight == None:
+        attn_weight = rev_attn
+    else:
+        for layer in range(len(rev_attn)):
+            attn_weight[layer] = torch.cat([attn_weight[layer], rev_attn[layer]])
+
+    # shape of rev_attn (layer, batch, head, out_len, inp_len+1)
+
+    for i in range(len(styles)):
+        style = styles[i]
+        title = 'recon' if style == raw_style else 'reverse'
+        out_token = recon_out_token if style == raw_style else rev_out_token
+        for layer in range(len(attn_weight)):
+            ## if you use different number of heads, you have to change here
+            fig, axs = plt.subplots(2, 2, figsize=(15, 12))
+            for head in range(4):
+                ax = axs[head//2][head%2]
+                attn = attn_weight[layer][i][head]
+                plot_attn(attn, inp_token, styles[i], out_token, vocab, ax, f'head {head}')
+                plt.setp(ax.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
+            fig.colorbar(axs[0][0].get_images()[0], ax=axs)
+            fig.suptitle(f'cross attention @ layer {layer+1} (x: input, y: output)', fontsize=20)
+            output_name = f'{output_dir}/{title}_attn_layer{layer+1}.png'
+            fig.savefig(output_name)
+            log(log_f, f'save cross attention figure at {output_name}')
     
+    ### part b: gradient norm
+    log(log_f, 'part b: gradient norm')
+
+    recon_gradient = find_gradient(model_F, recon_log_prob, inp_token, styles[0], recon_out_token)
+    rev_gradient = find_gradient(model_F, rev_log_prob, inp_token, styles[1], rev_out_token)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    fig.suptitle("Gradient norm (x: input, y: output)",fontsize=20)
+
+    plot_gradient_norm(recon_gradient, inp_token, styles[0], recon_out_token, vocab, ax1, "reconstruction")
+    plot_gradient_norm(rev_gradient, inp_token, styles[1], rev_out_token, vocab, ax2, "reverse")
+
+    ## ploting config
+    plt.setp(ax1.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
+    plt.setp(ax2.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
+    fig.colorbar(ax1.get_images()[0], ax=(ax1, ax2))
+    output_name = f'{output_dir}/gradient_norm.png'
+    fig.savefig(output_name)
+    log(log_f, f'save gradient norm figure at {output_name}')
     log(log_f, '***** 2-1 end *****')
     log(log_f)
 
 
-    ## 2-2. tsne
-    log(log_f, "***** 2-2: T-sne *****")
+    # 2-2. mask input tokens
+    log(log_f, '***** 2-2: mask input *****')
+    raw_style = sample_raw_style
+
+    inp_token = sample_inp_token
+    inp_length = sample_inp_length
+    
+    inp_tokens = inp_token.repeat(inp_length, 1) ## mask until '. <eos>' but contain the origin sentence
+    for i in range(inp_tokens.shape[0]-1):
+        inp_tokens[i+1][i] = unk_idx
+
+    inp_lengths = torch.full_like(inp_tokens[:, 0], inp_length)
+    raw_styles = torch.full_like(inp_tokens[:, 0], raw_style)
+    rev_styles = 1 - raw_styles
+
+    with torch.no_grad():
+        rev_log_probs = model_F(
+            inp_tokens, 
+            None,
+            inp_lengths,
+            rev_styles,
+            generate=True,
+            differentiable_decode=False,
+            temperature=1
+        )
+
+    gold_text = tensor2text(vocab, inp_tokens.cpu(), remain_unk=True)
+    rev_idx = rev_log_probs.argmax(-1).cpu()
+    rev_output = tensor2text(vocab, rev_idx, remain_unk=True)
+
+    for i in range(len(gold_text)):
+        log(log_f, '-')
+        log(log_f, '[ORG]', gold_text[i])
+        log(log_f, '[REV]', rev_output[i])
+
+    log(log_f, '***** 2-2 end *****')
+    log(log_f)
+
+    ## 2-3. tsne
+    log(log_f, "***** 2-3: T-sne *****")
     features = []
     labels = []
 
@@ -234,52 +344,10 @@ def part2(args):
         ax.scatter(X_emb[idxs, 0], X_emb[idxs, 1], color=colors[i], label=classes[i], alpha=0.8, edgecolors='none')
     ax.legend()
     ax.set_title('t-sne of four distributions')
-    output_name = os.path.join(output_dir, 'problem2_tsne.png')
+    output_name = os.path.join(output_dir, 'tsne.png')
     plt.savefig(output_name)
     log(log_f, f'save T-sne figure at {output_name}')
-    log(log_f, "***** 2-2 end *****")
+    log(log_f, "***** 2-3 end *****")
     log(log_f)
 
-    # 2-3. mask input tokens
-    log(log_f, '***** 2-3: mask input *****')
-    raw_style = 1
-
-    for batch in pos_iter:
-        inp_tokens = batch.text
-        inp_lengths = get_lengths(inp_tokens, eos_idx)
-        break ## only select first batch
-
-    sample_idx = np.random.randint(inp_tokens.shape[0])
-    inp_token = inp_tokens[sample_idx]
-    inp_length = inp_lengths[sample_idx]
-    
-    inp_tokens = inp_token.repeat(inp_length-2+1, 1) ## mask until '. <eos>' but contain the origin sentence
-    for i in range(inp_tokens.shape[0]-1):
-        inp_tokens[i+1][i] = unk_idx
-
-    inp_lengths = torch.full_like(inp_tokens[:, 0], inp_length)
-    raw_styles = torch.full_like(inp_tokens[:, 0], raw_style)
-    rev_styles = 1 - raw_styles
-
-    with torch.no_grad():
-        rev_log_probs = model_F(
-            inp_tokens, 
-            None,
-            inp_lengths,
-            rev_styles,
-            generate=True,
-            differentiable_decode=False,
-            temperature=1
-        )
-
-    gold_text = tensor2text(vocab, inp_tokens.cpu(), remain_unk=True)
-    rev_idx = rev_log_probs.argmax(-1).cpu()
-    rev_output = tensor2text(vocab, rev_idx, remain_unk=True)
-
-    for i in range(len(gold_text)):
-        log(log_f, '-')
-        log(log_f, '[ORG]', gold_text[i])
-        log(log_f, '[REV]', rev_output[i])
-
-    log(log_f, '***** 2-3 end *****')
     log_f.close()
