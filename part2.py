@@ -59,15 +59,9 @@ def find_gradient(model, log_prob, inp_token, style, out_token):
         style_gradients = full_style_gradients[style]
 
         inp_gradients = torch.cat((style_gradients.unsqueeze(0), tok_gradients), 0).detach()
-        # norms = torch.linalg.norm(inp_gradients, ord=2, dim=-1).detach()
-        # sums = torch.sum(norms, dim=-1)
-        # norms /= sums
-        # norms_list.append(norms)
         gradient_list.append(inp_gradients)
 
-    # gradient_norm = torch.stack(norms_list).cpu()
     gradient = torch.stack(gradient_list).cpu()
-    # return gradient_norm
     return gradient
 
 def plot_gradient_norm(gradient, inp_token, style, out_token, vocab, ax, title):
@@ -83,7 +77,7 @@ def plot_gradient_norm(gradient, inp_token, style, out_token, vocab, ax, title):
     out_text = out_text[:out_length]
     gradient = gradient[:out_length, :inp_length]
 
-    gradient_norm = torch.linalg.norm(gradient, ord=2, dim=-1)
+    gradient_norm = gradient.norm(dim=-1)
     gradient_norm /= torch.sum(gradient_norm, dim=-1, keepdim=True) # normalize
 
     ax.imshow(gradient_norm)
