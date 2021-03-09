@@ -131,8 +131,10 @@ def part2(args):
     eos_idx = vocab.stoi['<eos>'] # 2
     unk_idx = vocab.stoi['<unk>'] # 0
 
-    ## we would use the s_id-th example
+    # we would use the s_id-th example
+    #use sample_id = 29 would get the same results in slide
     sample_id = np.random.randint(args.batch_size)
+    log(log_f, f'sample id : {sample_id}')
     batch = next(iter(pos_iter))
     sample_inp_token = batch.text[sample_id]
     sample_inp_length = get_lengths(batch.text, eos_idx)[sample_id]
@@ -198,7 +200,7 @@ def part2(args):
             for head in range(4):
                 ax = axs[head//2][head%2]
                 attn = attn_weight[layer][i][head]
-                plot_attn(attn, inp_token, styles[i], out_token, vocab, ax, f'head {head}')
+                plot_attn(attn, inp_token, styles[i], out_token, vocab, ax, f'head {head+1}')
                 plt.setp(ax.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
             fig.colorbar(axs[0][0].get_images()[0], ax=axs)
             fig.suptitle(f'cross attention @ layer {layer+1} (x: input, y: output)', fontsize=20)
@@ -255,9 +257,22 @@ def part2(args):
             temperature=1
         )
 
-    gold_text = tensor2text(vocab, inp_tokens.cpu(), remain_unk=True)
+    # gold_text = tensor2text(vocab, inp_tokens.cpu(), remain_unk=True)
     rev_idx = rev_log_probs.argmax(-1).cpu()
-    rev_output = tensor2text(vocab, rev_idx, remain_unk=True)
+    # rev_output = tensor2text(vocab, rev_idx, remain_unk=True)
+
+    gold_text = []
+    rev_output = []
+
+    for i in range(len(rev_idx)):
+        inp_text = [vocab.itos[w] for w in inp_tokens[i]]
+        rev_text = [vocab.itos[w] for w in rev_idx[i]]
+
+        inp_len = inp_text.index('<eos>')
+        rev_len = rev_text.index('<eos>')
+
+        gold_text.append(' '.join(inp_text[:inp_len]))
+        rev_output.append(' '.join(rev_text[:rev_len]))
 
     for i in range(len(gold_text)):
         log(log_f, '-')
