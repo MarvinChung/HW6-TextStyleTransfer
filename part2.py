@@ -126,7 +126,6 @@ def part2(args):
     unk_idx = vocab.stoi['<unk>'] # 0
 
     # we would use the s_id-th example
-    #use sample_id = 29 would get the same results in slide
     sample_id = np.random.randint(args.batch_size)
     log(log_f, f'sample id : {sample_id}')
     batch = next(iter(pos_iter))
